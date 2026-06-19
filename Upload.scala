@@ -13,6 +13,12 @@ object Upload {
     Versions("3.0.3", "2.7"),
     Versions("2.4.2", "2.7")
   )
+  private val isOnDlcdn = Set(
+    "4.2.0",
+    "4.1.2",
+    "4.0.3",
+    "3.5.8"
+  )
   def main(args: Array[String]): Unit = {
     val tag = os.proc("git", "tag", "--points-at", "HEAD").call().out.trim()
     val dummy = tag.isEmpty
@@ -25,7 +31,11 @@ object Upload {
     val files = versions.map { ver =>
       val sparkVer = ver.sparkVersion
       val hadoopVer = ver.hadoopVersion
-      val url = s"https://archive.apache.org/dist/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
+      val url =
+        if (isOnDlcdn(sparkVer))
+          s"https://dlcdn.apache.org/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
+        else
+          s"https://archive.apache.org/dist/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
       val name = s"spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
       val dest = os.temp(prefix = name, suffix = ".tgz")
       create(url, dest)
