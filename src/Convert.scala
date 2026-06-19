@@ -28,6 +28,9 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
 import scala.util.Using
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import coursier.cache.Cache
+import coursier.cache.CacheLogger
+import coursier.cache.loggers.RefreshLogger
 
 object Convert extends CaseApp[ConvertOptions] {
 
@@ -94,9 +97,10 @@ object Convert extends CaseApp[ConvertOptions] {
 
     val distribPath =
       if (arg.contains("://")) {
-        val cache = ArchiveCache()
+        val cache = FileCache().withLogger(RefreshLogger.create())
+        val archiveCache = ArchiveCache().withCache(cache)
         val artifact = Artifact(arg).withChanging(options.changing)
-        cache.get(artifact).unsafeRun()(cache.cache.ec) match {
+        archiveCache.get(artifact).unsafeRun()(cache.ec) match {
           case Left(e)  => throw new Exception(e)
           case Right(f) => os.Path(f, os.pwd)
         }
