@@ -6,10 +6,10 @@ object Upload {
   private def create(sourceUrl: String, dest: os.Path): Unit =
     os.proc("scala-cli", "run", "src", "--", "--force", "--dest", dest, "--archive", sourceUrl)
       .call(stdin = os.Inherit, stdout = os.Inherit)
-  case class Versions(sparkVersion: String)
+  case class Versions(sparkVersion: String, hadoopVersion: String)
   private def versions = Seq(
-    Versions("3.0.3"),
-    Versions("2.4.2")
+    Versions("3.0.3", "2.7"),
+    Versions("2.4.2", "2.7")
   )
   def main(args: Array[String]): Unit = {
     val tag = os.proc("git", "tag", "--points-at", "HEAD").call().out.trim()
@@ -22,8 +22,9 @@ object Upload {
     }
     val files = versions.map { ver =>
       val sparkVer = ver.sparkVersion
-      val url = s"https://archive.apache.org/dist/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop2.7.tgz"
-      val name = s"spark-$sparkVer-bin-hadoop2.7.tgz"
+      val hadoopVer = ver.hadoopVersion
+      val url = s"https://archive.apache.org/dist/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
+      val name = s"spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
       val dest = os.temp(prefix = name, suffix = ".tgz")
       create(url, dest)
       dest -> s"$name.tgz"
