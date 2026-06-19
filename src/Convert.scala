@@ -121,6 +121,13 @@ object Convert extends CaseApp[ConvertOptions] {
       if (options.archive) os.temp.dir(prefix = "convert-spark-distrib")
       else dest
 
+    def size(p: os.Path): Long =
+      if (os.isDir(p)) os.list(p).map(size).sum
+      else os.size(p)
+
+    System.err.println(s"Input Spark archive: $distribPath")
+    System.err.println(s"Size: ${size(distribPath)} B")
+
     convert(
       distribPath,
       dirDest,
@@ -149,6 +156,9 @@ object Convert extends CaseApp[ConvertOptions] {
         }
       }
     }
+
+    System.err.println(s"Output Spark distribution: $dest")
+    System.err.println(s"Size: ${size(dest)} B")
   }
 
   def convert(
