@@ -19,6 +19,7 @@ import dependency._
 import Util._
 
 import java.nio.charset.StandardCharsets
+import java.util.zip.ZipFile
 
 import scala.collection.mutable
 import scala.util.control.NonFatal
@@ -160,10 +161,69 @@ object Convert extends CaseApp[ConvertOptions] {
     os.makeDir.all(dest)
 
     val sparkVersion = sparkVersionOpt.map(_.trim).filter(_.nonEmpty).getOrElse {
-      ???
+      def findSparkJar(name: String) =
+        os.walk.stream(distribPath).find { p =>
+          p.segments.contains("jars") &&
+          p.last.startsWith(s"spark-${name}_") &&
+          p.last.endsWith(".jar") &&
+          os.isFile(p)
+        }
+
+      val sparkPropertiesJar = findSparkJar("common-utils")
+        .orElse(findSparkJar("core"))
+        .getOrElse {
+          System.err.println(s"Error: could not find a **/jars/spark-{core,common-utils}_*.jar file under $distribPath")
+          sys.exit(1)
+        }
+
+      val versionLinePrefix = "version="
+      val versionOpt = Using.resource(new ZipFile(sparkPropertiesJar.toIO)) { zf =>
+        Option(zf.getEntry("spark-version-info.properties")).flatMap { ent =>
+          Using.resource(zf.getInputStream(ent)) { is =>
+            new String(is.readAllBytes(), StandardCharsets.UTF_8)
+              .linesIterator
+              .map(_.trim)
+              .find(_.startsWith(versionLinePrefix))
+              .map(_.stripPrefix(versionLinePrefix).trim)
+          }
+        }
+      }
+
+      versionOpt.getOrElse {
+        System.err.println(s"Error: could not find a $versionLinePrefix line in spark-version-info.properties inside $sparkPropertiesJar")
+        sys.exit(1)
+      }
     }
     val scalaVersion = scalaVersionOpt.map(_.trim).filter(_.nonEmpty).getOrElse {
-      ???
+      val scalaLibraryJar = os.walk.stream(distribPath)
+        .find { p =>
+          p.segments.contains("jars") &&
+          p.last.startsWith("scala-library-") &&
+          p.last.endsWith(".jar") &&
+          os.isFile(p)
+        }
+        .getOrElse {
+          System.err.println(s"Error: could not find a **/jars/scala-library-*.jar file under $distribPath")
+          sys.exit(1)
+        }
+
+      val versionLinePrefix = "version.number="
+      val versionOpt = Using.resource(new ZipFile(scalaLibraryJar.toIO)) { zf =>
+        Option(zf.getEntry("library.properties")).flatMap { ent =>
+          Using.resource(zf.getInputStream(ent)) { is =>
+            new String(is.readAllBytes(), StandardCharsets.UTF_8)
+              .linesIterator
+              .map(_.trim)
+              .find(_.startsWith(versionLinePrefix))
+              .map(_.stripPrefix(versionLinePrefix).trim)
+          }
+        }
+      }
+
+      versionOpt.getOrElse {
+        System.err.println(s"Error: could not find a $versionLinePrefix line in library.properties inside $scalaLibraryJar")
+        sys.exit(1)
+      }
     }
 
     // FIXME Add more?
