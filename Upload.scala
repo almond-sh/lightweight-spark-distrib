@@ -3,9 +3,11 @@
 //> using lib "com.lihaoyi::os-lib:0.8.1"
 
 object Upload {
-  private def create(sourceUrl: String, dest: os.Path): Unit =
-    os.proc("scala-cli", "run", "src", "--", "--force", "--dest", dest, "--archive", sourceUrl)
+  private def create(sourceUrl: String, dest: os.Path): Unit = {
+    val extraArgs = if (System.getenv("CI") == null) Nil else Seq("--server=false")
+    os.proc("scala-cli", "run", "src", extraArgs, "--", "--force", "--dest", dest, "--archive", sourceUrl)
       .call(stdin = os.Inherit, stdout = os.Inherit)
+  }
   case class Versions(sparkVersion: String, hadoopVersion: String)
   private def versions = Seq(
     Versions("3.0.3", "2.7"),
