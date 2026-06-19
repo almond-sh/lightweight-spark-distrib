@@ -10,7 +10,20 @@ object Upload {
   }
   case class Versions(sparkVersion: String, hadoopVersion: String)
   private def versions = Seq(
+    Versions("4.2.0", "3"),
+    Versions("4.1.2", "3"),
+    Versions("4.0.3", "3"),
+    Versions("3.5.8", "3"),
+    Versions("3.4.4", "3"),
+    Versions("3.3.4", "3"),
+    Versions("3.3.4", "2"),
+    Versions("3.2.4", "3.2"),
+    Versions("3.2.4", "2.7"),
+    Versions("3.1.3", "3.2"),
+    Versions("3.1.3", "2.7"),
+    Versions("3.0.3", "3.2"),
     Versions("3.0.3", "2.7"),
+    Versions("2.4.8", "2.7"),
     Versions("2.4.2", "2.7")
   )
   private val isOnDlcdn = Set(

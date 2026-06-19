@@ -240,30 +240,75 @@ object Convert extends CaseApp[ConvertOptions] {
       }
     }
 
+    // Ammonite JARs are only in some distributions, and are cross-published for the full Scala version,
+    // like jars/ammonite_2.13.18-3.0.8.jar (ammonite-*.jar files are only cross-published for the Scala
+    // binary version, and don't give us the full Ammonite version)
+    val ammoniteVersionOpt = {
+      val prefix = "ammonite_"
+      os.walk.stream(distribPath)
+        .find { p =>
+          p.segments.contains("jars") &&
+          p.last.startsWith(prefix) &&
+          p.last.endsWith(".jar") &&
+          os.isFile(p)
+        }
+        .flatMap { p =>
+          // strips the Scala version, like "2.13.18-3.0.8" -> "3.0.8"
+          val versions = p.last.stripPrefix(prefix).stripSuffix(".jar")
+          val dashIdx = versions.indexOf('-')
+          if (dashIdx < 0) {
+            System.err.println(s"Warning: could not get an Ammonite version from ${p.last}, ignoring it")
+            None
+          }
+          else
+            Some(versions.drop(dashIdx + 1))
+        }
+    }
+    for (ammoniteVersion <- ammoniteVersionOpt)
+      System.err.println(s"Found Ammonite $ammoniteVersion in $distribPath")
+
     // FIXME Add more?
     // (see "cs complete-dependency org.apache.spark: | grep '_2\.12$'"
     // or `ls "$(cs get https://archive.apache.org/dist/spark/spark-2.4.2/spark-2.4.2-bin-hadoop2.7.tgz --archive)"/*/jars | grep '^spark-'`)
-    val sparkModules = Seq(
-      "core",
-      "graphx",
-      "hive",
-      "hive-thriftserver",
-      "kubernetes",
-      "mesos",
-      "mllib",
-      "repl",
-      "sql",
-      "streaming",
-      "yarn"
-    )
+    def sparkModules(sparkVersion: String) = {
+      val maybeMesos =
+        if (sparkVersion.startsWith("3.") || sparkVersion.startsWith("2.4."))
+          Seq("mesos")
+        else
+          Nil
+      val maybeConnect =
+        if (sparkVersion.startsWith("3.4.") || sparkVersion.startsWith("3.5.") || sparkVersion.startsWith("4."))
+          Seq("connect", "connect-client-jvm")
+        else
+          Nil
+      val maybeConnectJdbc =
+        if (sparkVersion.startsWith("4.") && !sparkVersion.startsWith("4.0."))
+          Seq("connect-client-jdbc")
+        else
+          Nil
+      Seq(
+        "core",
+        "graphx",
+        "hive",
+        "hive-thriftserver",
+        "kubernetes",
+        "mllib",
+        "repl",
+        "sql",
+        "streaming",
+        "yarn"
+      ) ++ maybeMesos ++ maybeConnect ++ maybeConnectJdbc
+    }
 
     val params = ScalaParameters(scalaVersion)
-    val sparkDependencies = sparkModules.map { mod =>
+    val sparkDependencies = sparkModules(sparkVersion).map { mod =>
       dep"org.apache.spark::spark-$mod:$sparkVersion".applyParams(params).toCs
     }
     val extraDependencies = Seq(
       dep"com.github.scopt::scopt:3.7.1".applyParams(params).toCs
-    )
+    ) ++ ammoniteVersionOpt.map { ammoniteVersion =>
+      dep"com.lihaoyi:::ammonite:$ammoniteVersion,exclude=com.google.code.gson%gson".applyParams(params).toCs
+    }
     val dependencies = sparkDependencies ++ extraDependencies
 
     System.err.println(s"Fetching Spark JARs via coursier")
