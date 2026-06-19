@@ -1,15 +1,17 @@
 //> using lib "com.github.alexarchambault::case-app:2.1.0-M14"
 //> using lib "com.lihaoyi::os-lib:0.8.1"
 //> using lib "com.lihaoyi::pprint:0.7.3"
-//> using lib "io.get-coursier::coursier:2.1.0-M5-24-g678b31710"
-//> using lib "io.get-coursier::dependency:0.2.2"
+//> using lib "io.get-coursier::coursier:2.1.25-M25"
+//> using lib "io.get-coursier::coursier-archive-cache:2.1.25-M25"
 //> using lib "org.apache.commons:commons-compress:1.21"
-//> using scala "2.13.8"
+//> using scala "2.13.18"
+//> using jvm "17"
 
 //> using option "-Ywarn-unused"
 
 import caseapp.core.app.CaseApp
 import caseapp.core.RemainingArgs
+import coursier.cache.loggers.RefreshLogger
 import coursier.cache.{ArchiveCache, FileCache}
 import coursier.core.Publication
 import coursier.error.ResolutionError
@@ -28,9 +30,6 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
 import scala.util.Using
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
-import coursier.cache.Cache
-import coursier.cache.CacheLogger
-import coursier.cache.loggers.RefreshLogger
 
 object Convert extends CaseApp[ConvertOptions] {
 
@@ -59,8 +58,9 @@ object Convert extends CaseApp[ConvertOptions] {
 
   def fetchJarVersion(dep: coursier.Dependency, pub: Publication, forceVersion: String): Option[String] = {
     val dep0 = dep.withVersion(forceVersion).withTransitive(false).withPublication(pub)
+    val cache = FileCache().withLogger(RefreshLogger.create())
     val resOpt =
-      try Some(Fetch().addDependencies(dep0).runResult()(FileCache().ec))
+      try Some(cache.logger.use(Fetch().addDependencies(dep0).withCache(cache).runResult()(cache.ec)))
       catch {
         case e: ResolutionError.CantDownloadModule if e.perRepositoryErrors.forall(_.startsWith("not found: ")) =>
           None
@@ -100,7 +100,7 @@ object Convert extends CaseApp[ConvertOptions] {
         val cache = FileCache().withLogger(RefreshLogger.create())
         val archiveCache = ArchiveCache().withCache(cache)
         val artifact = Artifact(arg).withChanging(options.changing)
-        archiveCache.get(artifact).unsafeRun()(cache.ec) match {
+        cache.logger.using(archiveCache.get(artifact)).unsafeRun(true)(cache.ec) match {
           case Left(e)  => throw new Exception(e)
           case Right(f) => os.Path(f, os.pwd)
         }
@@ -267,9 +267,19 @@ object Convert extends CaseApp[ConvertOptions] {
     val dependencies = sparkDependencies ++ extraDependencies
 
     System.err.println(s"Fetching Spark JARs via coursier")
-    val res = Fetch()
-      .addDependencies(dependencies: _*)
-      .runResult()(FileCache().ec)
+    val cache = FileCache().withLogger(RefreshLogger.create())
+    val res =
+      try
+        cache.logger.use {
+         Fetch()
+            .addDependencies(dependencies: _*)
+            .withCache(cache)
+            .runResult()(cache.ec)
+        }
+      catch {
+        case NonFatal(e) =>
+          throw new Exception(e)
+      }
     res.files
     System.err.println(s"Got ${res.files.length} JARs")
 
@@ -317,7 +327,7 @@ object Convert extends CaseApp[ConvertOptions] {
         os.copy(p, dest / rel, copyAttributes = true)
     }
 
-    val csSh = FileCache().file(Artifact(csShUrl)).run.unsafeRun()(FileCache().ec) match {
+    val csSh = cache.logger.using(cache.file(Artifact(csShUrl)).run).unsafeRun(true)(cache.ec) match {
       case Left(e) => throw new Exception(e)
       case Right(f) => os.Path(f, os.pwd)
     }
