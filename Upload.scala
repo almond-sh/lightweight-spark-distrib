@@ -37,7 +37,9 @@ object Upload {
         else
           s"https://archive.apache.org/dist/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
       val name = s"spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
-      val dest = os.temp(prefix = name, suffix = ".tgz")
+      val dest =
+        if (System.getenv("CI") == null) os.pwd / "tmp" / name
+        else os.temp(prefix = name.stripSuffix(".tgz"), suffix = ".tgz")
       create(url, dest)
       dest -> s"$name.tgz"
     }
