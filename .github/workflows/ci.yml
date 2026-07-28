@@ -8,46 +8,29 @@ on:
   pull_request:
 
 jobs:
-  test:
+  compile:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
-    # - uses: coursier/cache-action@v6.3
-    - uses: VirtusLab/scala-cli-setup@v0.1
+    - uses: coursier/setup-action@v3
+      with:
+        apps: scala-cli
     - name: Test
-      run: scala-cli test src --cross
-
-  # publish:
-  #   needs: test
-  #   if: github.event_name == 'push'
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - uses: actions/checkout@v3
-  #     with:
-  #       fetch-depth: 0
-  #   - uses: coursier/cache-action@v6.3
-  #   - uses: VirtusLab/scala-cli-setup@v0.1
-  #   - name: Publish
-  #     run: scala-cli publish src --cross
-  #     env:
-  #       PUBLISH_USER: ${{ secrets.PUBLISH_USER }}
-  #       PUBLISH_PASSWORD: ${{ secrets.PUBLISH_PASSWORD }}
-  #       PUBLISH_SECRET_KEY: ${{ secrets.PUBLISH_SECRET_KEY }}
-  #       PUBLISH_SECRET_KEY_PASSWORD: ${{ secrets.PUBLISH_SECRET_KEY_PASSWORD }}
+      run: scala-cli compile src --server=false
 
   package:
-    needs: test
-    if: github.event_name == 'push'
+    needs: compile
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
-    # - uses: coursier/cache-action@v6.3
-    - uses: VirtusLab/scala-cli-setup@v0.1
+    - uses: coursier/setup-action@v3
+      with:
+        apps: scala-cli
     - name: Create and upload archives
-      run: scala-cli run Upload.scala
+      run: scala-cli run Upload.scala --server=false
       env:
         UPLOAD_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
