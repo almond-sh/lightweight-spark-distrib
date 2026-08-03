@@ -14,7 +14,12 @@ final case class ConvertOptions(
     sparkVersion: Option[String] = None,
   @HelpMessage("Force Scala version")
   @ExtraName("scala")
-    scalaVersion: Option[String] = None
+    scalaVersion: Option[String] = None,
+  @HelpMessage("Re-create the YARN shuffle service JAR right away, and compare its entry names with those of the one the Spark distribution ships")
+    checkYarnShuffleJar: Boolean = false,
+  @HelpMessage("Command running the coursier CLI, used by --check-yarn-shuffle-jar (defaults to the cs.sh script the generated distribution uses). Pass several times for a command made of several arguments.")
+  @ExtraName("cs")
+    csCommand: List[String] = Nil
 )
 // format: on
 

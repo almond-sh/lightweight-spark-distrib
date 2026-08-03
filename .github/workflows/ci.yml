@@ -17,6 +17,7 @@ jobs:
     - uses: coursier/setup-action@v3
       with:
         apps: scala-cli
+        version: nightly
     - name: Test
       run: scala-cli compile src --server=false
 
@@ -30,6 +31,7 @@ jobs:
     - uses: coursier/setup-action@v3
       with:
         apps: scala-cli
+        version: nightly
     - name: Create and upload archives
       run: scala-cli run Upload.scala --server=false
       env:

@@ -5,8 +5,14 @@
 object Upload {
   private def create(sourceUrl: String, dest: os.Path): Unit = {
     val extraArgs = if (System.getenv("CI") == null) Nil else Seq("--server=false")
-    os.proc("scala-cli", "run", "src", extraArgs, "--", "--force", "--dest", dest, "--archive", sourceUrl)
-      .call(stdin = os.Inherit, stdout = os.Inherit)
+    os.proc(
+      "scala-cli", "run", "src", extraArgs, "--",
+      "--force", "--dest", dest, "--archive",
+      // re-creating the YARN shuffle service JAR is the one thing fetch-jars.sh does that isn't a
+      // plain download, so check right away that it comes out with the entries Spark ships
+      "--check-yarn-shuffle-jar", "--cs", "cs",
+      sourceUrl
+    ).call(stdin = os.Inherit, stdout = os.Inherit)
   }
   case class Versions(sparkVersion: String, hadoopVersion: String)
   private def versions = Seq(

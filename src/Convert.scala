@@ -21,9 +21,11 @@ import dependency._
 import Util._
 
 import java.nio.charset.StandardCharsets
-import java.util.zip.ZipFile
+import java.nio.file.Files
+import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 import scala.util.Properties
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
@@ -81,6 +83,173 @@ object Convert extends CaseApp[ConvertOptions] {
 
   def csShUrl = "https://github.com/coursier/ci-scripts/raw/dcc000482233f5d4194b11e36573862a869b2fd7/cs.sh"
 
+  // spark.shade.packageName, from Spark's parent POM
+  def sparkShadePackage = "org.sparkproject"
+
+  def nettyNativeLibDir = "META-INF/native"
+  def nettyNativeLibPrefix = "libnetty_"
+  def shadedNettyNativeLibPrefix = s"lib${sparkShadePackage.replace('.', '_')}_netty_"
+
+  def renameNettyNativeLib(name: String): String = {
+    val prefix = s"$nettyNativeLibDir/$nettyNativeLibPrefix"
+    if (name.startsWith(prefix)) s"$nettyNativeLibDir/$shadedNettyNativeLibPrefix" + name.stripPrefix(prefix)
+    else name
+  }
+
+  /** Renames the netty native libraries of a JAR we generated, the way Spark's build does with a
+    * maven-antrun-plugin execution that runs after the shading.
+    *
+    * The relocated netty derives the name of the libraries it loads from its own package, so
+    * without this it finds none of them, and silently falls back to NIO and to the JDK SSL
+    * provider. The MS Windows DLL is deliberately left alone, as it is in Spark's build.
+    */
+  def renameNettyNativeLibs(jar: os.Path): Unit = {
+    val updated = os.temp(prefix = jar.last.stripSuffix(".jar"), suffix = ".jar")
+    Using.resource(new ZipFile(jar.toIO)) { zf =>
+      Using.resource(new ZipOutputStream(Files.newOutputStream(updated.toNIO))) { zos =>
+        for (ent <- zf.entries.asScala) {
+          val updatedEnt = new ZipEntry(renameNettyNativeLib(ent.getName))
+          updatedEnt.setTime(ent.getTime)
+          zos.putNextEntry(updatedEnt)
+          if (!ent.isDirectory)
+            Using.resource(zf.getInputStream(ent))(_.transferTo(zos))
+          zos.closeEntry()
+        }
+      }
+    }
+    os.move(updated, jar, replaceExisting = true)
+  }
+
+  /** The same renaming, as a shell snippet, for the script the lightweight distribution ships.
+    *
+    * Unzipping and re-jarring is what Spark's own build does here. It needs `jar`, which a JRE
+    * doesn't have, so fall back on a JVM coursier gives us rather than on whatever runs Spark.
+    */
+  def renameNettyNativeLibsScript(dest: String): String = {
+    val pattern = s"$nettyNativeLibDir/$nettyNativeLibPrefix*"
+    s"""
+       |# Spark's build renames these after the shading, so that the relocated netty finds them
+       |shuffle_jar="$$PWD/${shellQuote(dest)}"
+       |if unzip -l "$$shuffle_jar" '$pattern' > /dev/null 2>&1; then
+       |  echo "Renaming netty native libraries in $dest" 1>&2
+       |  if [ -n "$${JAVA_HOME:-}" ] && [ -x "$$JAVA_HOME/bin/jar" ]; then
+       |    jar_command="$$JAVA_HOME/bin/jar"
+       |  elif command -v jar > /dev/null 2>&1; then
+       |    jar_command="jar"
+       |  else
+       |    jar_command="$$(./fetch-jars/cs.sh java-home)/bin/jar"
+       |  fi
+       |  exploded="$$(mktemp -d)"
+       |  unzip -q "$$shuffle_jar" -d "$$exploded"
+       |  (
+       |    cd "$$exploded/$nettyNativeLibDir"
+       |    for f in $nettyNativeLibPrefix*; do
+       |      mv "$$f" "$shadedNettyNativeLibPrefix$${f#$nettyNativeLibPrefix}"
+       |    done
+       |  )
+       |  "$$jar_command" --create --no-manifest --file "$$shuffle_jar" -C "$$exploded" .
+       |  rm -rf "$$exploded"
+       |fi
+       |""".stripMargin
+  }
+
+  def yarnShuffleJarName(sparkVersion: String): String =
+    s"spark-$sparkVersion-yarn-shuffle.jar"
+
+  /** The coursier command that re-creates yarn/spark-$sparkVersion-yarn-shuffle.jar.
+    *
+    * Spark builds that JAR with the maven-shade-plugin, out of common/network-yarn. The POM
+    * published for that module is a dependency-reduced one -- everything the shade plugin bundled
+    * was stripped from it -- so spark-network-shuffle, its only compile dependency in the source
+    * POM, has to be asked for explicitly. The exclusions stand for the `provided` scopes of that
+    * POM and of the Spark parent POM; nothing needs adding, as guava and
+    * org.spark-project.spark:unused are already relocated inside the published
+    * spark-network-common JAR, and netty-common ships jctools pre-shaded. The relocations and the
+    * excluded entries are the shade plugin configuration of that same POM.
+    *
+    * Arguments are grouped so that each group can go on a line of its own when the command is
+    * written to a script.
+    */
+  def yarnShuffleJarCommand(
+    sparkVersion: String,
+    scalaBinaryVersion: String,
+    dest: String
+  ): Seq[Seq[String]] =
+    Seq(
+      Seq("bootstrap", "--assembly", "--no-main-class", "-f"),
+      Seq("-o", dest),
+      Seq(s"org.apache.spark:spark-network-yarn_$scalaBinaryVersion:$sparkVersion"),
+      Seq(s"org.apache.spark:spark-network-shuffle_$scalaBinaryVersion:$sparkVersion"),
+      Seq("-E", s"org.apache.spark:spark-tags_$scalaBinaryVersion"),
+      Seq("-E", "com.google.protobuf:protobuf-java"),
+      Seq("-E", "org.slf4j:slf4j-api"),
+      Seq("--relocate", s"com.fasterxml.jackson=$sparkShadePackage.com.fasterxml.jackson"),
+      Seq("--relocate", s"io.netty=$sparkShadePackage.io.netty"),
+      Seq("-R", "exclude:META-INF/INDEX.LIST"),
+      Seq("-R", "exclude:META-INF/LICENSE"),
+      Seq("-R", "exclude:module-info.class")
+    )
+
+  def shellQuote(arg: String): String =
+    if (arg.nonEmpty && arg.forall(c => c.isLetterOrDigit || "._:/=@+-".contains(c))) arg
+    else "'" + arg.replace("'", "'\\''") + "'"
+
+  /** Rewrites an entry name of a JAR we generated to the name Spark's own build would give it.
+    *
+    * Only one difference is left once the netty native libraries have been renamed: the
+    * maven-shade-plugin relocates the *content* of multi-release entries, under META-INF/versions,
+    * but leaves their *path* alone, where jarjar -- which coursier shades with -- relocates both.
+    */
+  def normalizeYarnShuffleJarEntry(name: String): String = {
+    val versionsPrefix = "META-INF/versions/"
+    if (name.startsWith(versionsPrefix)) {
+      val rest = name.stripPrefix(versionsPrefix)
+      val idx = rest.indexOf('/')
+      val relocatedPrefix = sparkShadePackage.replace('.', '/') + "/"
+      if (idx < 0 || !rest.drop(idx + 1).startsWith(relocatedPrefix)) name
+      else versionsPrefix + rest.take(idx + 1) + rest.drop(idx + 1).stripPrefix(relocatedPrefix)
+    }
+    else name
+  }
+
+  /** Compares the entry names of a JAR we generated with those of the one Spark ships.
+    *
+    * Directory entries are left out: Spark's JAR is unzipped and re-jarred by the antrun step
+    * above, which writes an entry for every directory, where an assembly only carries the ones its
+    * inputs had.
+    */
+  def compareYarnShuffleJarEntries(generated: os.Path, reference: os.Path): Boolean = {
+    def entries(jar: os.Path, normalize: Boolean) =
+      Using.resource(new ZipFile(jar.toIO)) { zf =>
+        zf.entries
+          .asScala
+          .map(_.getName)
+          .filter(!_.endsWith("/"))
+          .map(name => if (normalize) normalizeYarnShuffleJarEntry(name) else name)
+          .toSet
+      }
+
+    val expected = entries(reference, normalize = false)
+    val got = entries(generated, normalize = true)
+
+    def report(label: String, names: Set[String]): Unit =
+      if (names.nonEmpty) {
+        System.err.println(s"Error: ${names.size} $label entries in ${generated.last}:")
+        for (name <- names.toVector.sorted.take(20))
+          System.err.println(s"  $name")
+        if (names.size > 20)
+          System.err.println(s"  … and ${names.size - 20} more")
+      }
+
+    report("extraneous", got -- expected)
+    report("missing", expected -- got)
+
+    val ok = got == expected
+    if (ok)
+      System.err.println(s"${generated.last} has the same ${got.size} entries as ${reference}")
+    ok
+  }
+
   def run(options: ConvertOptions, args: RemainingArgs): Unit = {
 
     val arg = args.all match {
@@ -136,7 +305,9 @@ object Convert extends CaseApp[ConvertOptions] {
       distribPath,
       dirDest,
       options.scalaVersion,
-      options.sparkVersion
+      options.sparkVersion,
+      options.checkYarnShuffleJar,
+      options.csCommand
     )
 
     if (options.archive) {
@@ -169,7 +340,9 @@ object Convert extends CaseApp[ConvertOptions] {
     distribPath: os.Path,
     dest: os.Path,
     scalaVersionOpt: Option[String],
-    sparkVersionOpt: Option[String]
+    sparkVersionOpt: Option[String],
+    checkYarnShuffleJar: Boolean = false,
+    csCommand: List[String] = Nil
   ): Unit = {
 
     os.makeDir.all(dest)
@@ -345,11 +518,21 @@ object Convert extends CaseApp[ConvertOptions] {
       .toMap
 
     val entries = new mutable.ListBuffer[(String, os.SubPath)]
+    // JARs the generated script builds with coursier rather than downloads, as (source, destination)
+    val generatedJars = new mutable.ListBuffer[(os.Path, os.SubPath)]
+
+    // The YARN shuffle service JAR is a ~100 MB assembly that isn't published anywhere, and weighs
+    // more than the rest of the distribution put together. It can be re-created from JARs that
+    // *are* on Maven Central, so leave it out and have fetch-jars.sh build it.
+    def isYarnShuffleJar(rel: os.SubPath) =
+      rel.segments.takeRight(2).toSeq == Seq("yarn", yarnShuffleJarName(sparkVersion))
 
     for (p <- os.walk.stream(distribPath)) {
       val rel = p.relativeTo(distribPath).asSubPath
       if (os.isDir(p))
         os.makeDir(dest / rel)
+      else if (isYarnShuffleJar(rel))
+        generatedJars += p -> rel
       else if (rel.last.endsWith(".jar")) {
         val urlOpt = map.get(rel.last).orElse {
           moduleNameMap.get(moduleName(rel.last)).flatMap {
@@ -387,28 +570,66 @@ object Convert extends CaseApp[ConvertOptions] {
     if (!Properties.isWin)
       os.perms.set(fetchJarsDir / "cs.sh", "rwxr-xr-x")
 
-    def fetchJarContent =
-      """#!/usr/bin/env bash
-        |set -eu
-        |
-        |cd "$(dirname "${BASH_SOURCE[0]}")"
-        |
-        |cat fetch-jars/jar-urls | while read entry; do
-        |  url="$(echo "$entry" | sed 's/->.*$//')"
-        |  dest="$(echo "$entry" | sed 's/^.*->//')"
-        |  echo "Getting $dest from $url" 1>&2
-        |  cp "$(./fetch-jars/cs.sh get "$url")" "$dest"
-        |done
-        |""".stripMargin.getBytes(StandardCharsets.UTF_8)
+    def relativeToBase(rel: os.SubPath) =
+      if (dropHead) rel.segments.drop(1).mkString("/") else rel.toString
+
+    val generatedJarCommands = generatedJars
+      .toList
+      .map {
+        case (_, rel) =>
+          val dest0 = relativeToBase(rel)
+          dest0 -> yarnShuffleJarCommand(sparkVersion, params.scalaBinaryVersion, dest0)
+      }
+
+    def fetchJarContent = {
+      val generate = generatedJarCommands
+        .map {
+          case (dest0, command) =>
+            val commandStr = command
+              .map(_.map(shellQuote).mkString(" "))
+              .mkString("./fetch-jars/cs.sh ", " \\\n  ", "")
+            s"""
+               |echo "Generating $dest0" 1>&2
+               |$commandStr
+               |${renameNettyNativeLibsScript(dest0)}""".stripMargin
+        }
+        .mkString
+      s"""#!/usr/bin/env bash
+         |set -eu
+         |
+         |cd "$$(dirname "$${BASH_SOURCE[0]}")"
+         |
+         |cat fetch-jars/jar-urls | while read entry; do
+         |  url="$$(echo "$$entry" | sed 's/->.*$$//')"
+         |  dest="$$(echo "$$entry" | sed 's/^.*->//')"
+         |  echo "Getting $$dest from $$url" 1>&2
+         |  cp "$$(./fetch-jars/cs.sh get "$$url")" "$$dest"
+         |done
+         |$generate""".stripMargin.getBytes(StandardCharsets.UTF_8)
+    }
     os.write(destBase / "fetch-jars.sh", fetchJarContent, perms = if (Properties.isWin) null else "rwxr-xr-x")
+
+    for ((source, rel) <- generatedJars)
+      System.err.println(s"$rel left out, fetch-jars.sh will re-create it from ${source.last}'s dependencies")
+
+    if (checkYarnShuffleJar)
+      for ((source, rel) <- generatedJars) {
+        val command = if (csCommand.isEmpty) Seq((fetchJarsDir / "cs.sh").toString) else csCommand
+        val generated = os.temp(prefix = rel.last.stripSuffix(".jar"), suffix = ".jar")
+        System.err.println(s"Re-creating $rel to compare it with the one $distribPath ships")
+        os.proc(command ++ yarnShuffleJarCommand(sparkVersion, params.scalaBinaryVersion, generated.toString).flatten)
+          .call(cwd = os.pwd, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
+        renameNettyNativeLibs(generated)
+        compareYarnShuffleJarEntries(generated, source)
+        os.remove(generated)
+      }
 
     def entriesContent =
       entries
         .toList
         .map {
           case (url, dest) =>
-            val dest0 = if (dropHead) dest.segments.drop(1).mkString("/") else dest.toString
-            s"$url->$dest0${System.lineSeparator()}"
+            s"$url->${relativeToBase(dest)}${System.lineSeparator()}"
         }
         .mkString
         .getBytes(StandardCharsets.UTF_8)
