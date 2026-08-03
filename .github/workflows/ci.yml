@@ -10,6 +10,9 @@ on:
 jobs:
   compile:
     runs-on: ubuntu-latest
+    outputs:
+      # the matrices of the jobs below, straight from the version list in Upload.scala
+      versions: ${{ steps.versions.outputs.versions }}
     steps:
     - uses: actions/checkout@v7
       with:
@@ -20,6 +23,9 @@ jobs:
         version: nightly
     - name: Test
       run: scala-cli compile src --server=false
+    - name: List the versions to package
+      id: versions
+      run: echo "versions=$(scala-cli run Upload.scala --server=false -- --json-versions)" >> "$GITHUB_OUTPUT"
 
   package:
     needs: compile
@@ -27,37 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-        - spark: "4.2.0"
-          hadoop: "3"
-        - spark: "4.1.2"
-          hadoop: "3"
-        - spark: "4.0.3"
-          hadoop: "3"
-        - spark: "3.5.8"
-          hadoop: "3"
-        - spark: "3.4.4"
-          hadoop: "3"
-        - spark: "3.3.4"
-          hadoop: "3"
-        - spark: "3.3.4"
-          hadoop: "2"
-        - spark: "3.2.4"
-          hadoop: "3.2"
-        - spark: "3.2.4"
-          hadoop: "2.7"
-        - spark: "3.1.3"
-          hadoop: "3.2"
-        - spark: "3.1.3"
-          hadoop: "2.7"
-        - spark: "3.0.3"
-          hadoop: "3.2"
-        - spark: "3.0.3"
-          hadoop: "2.7"
-        - spark: "2.4.8"
-          hadoop: "2.7"
-        - spark: "2.4.2"
-          hadoop: "2.7"
+        include: ${{ fromJSON(needs.compile.outputs.versions) }}
     name: package (spark-${{ matrix.spark }}-hadoop${{ matrix.hadoop }})
     steps:
     - uses: actions/checkout@v7
@@ -78,3 +54,24 @@ jobs:
         # (the artifact is then named after the file, and the name input ignored)
         archive: false
         if-no-files-found: error
+
+  # checks that what the lightweight archives leave out can actually be fetched back, from the
+  # archives themselves rather than from anything this repository has at hand
+  fetch-jars:
+    # package for the artifacts to be there, compile for the matrix
+    needs: [compile, package]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.compile.outputs.versions) }}
+    name: fetch-jars (spark-${{ matrix.spark }}-hadoop${{ matrix.hadoop }})
+    steps:
+    - uses: actions/download-artifact@v7
+      with:
+        name: spark-${{ matrix.spark }}-bin-hadoop${{ matrix.hadoop }}.tgz
+    - name: Uncompress the archive and run its fetch-jars.sh
+      run: |
+        tar -xzf spark-${{ matrix.spark }}-bin-hadoop${{ matrix.hadoop }}.tgz
+        cd spark-*/
+        ./fetch-jars.sh

@@ -38,14 +38,27 @@ object Upload {
     "4.0.3",
     "3.5.8"
   )
-  def main(args: Array[String]): Unit = {
+  /** The version list above, as the JSON a GitHub action matrix is made of.
+    *
+    * CI builds both of its matrices out of this, so that the versions to package live here only.
+    */
+  private def versionsJson =
+    versions
+      .map(ver => s"""{"spark": "${ver.sparkVersion}", "hadoop": "${ver.hadoopVersion}"}""")
+      .mkString("[", ", ", "]")
+  def main(args: Array[String]): Unit =
+    args match {
+      case Array("--json-versions") => println(versionsJson)
+      case _                        => upload(args)
+    }
+  private def upload(args: Array[String]): Unit = {
     val selected = args match {
       case Array() =>
         versions
       case Array(sparkVer, hadoopVer) =>
         Seq(Versions(sparkVer, hadoopVer))
       case _ =>
-        sys.error("Usage: Upload [sparkVersion hadoopVersion]")
+        sys.error("Usage: Upload [--json-versions | sparkVersion hadoopVersion]")
     }
     val tag = os.proc("git", "tag", "--points-at", "HEAD").call().out.trim()
     val dummy = tag.isEmpty
