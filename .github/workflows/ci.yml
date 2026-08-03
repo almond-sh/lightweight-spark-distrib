@@ -67,7 +67,8 @@ jobs:
         include: ${{ fromJSON(needs.compile.outputs.versions) }}
     name: fetch-jars (spark-${{ matrix.spark }}-hadoop${{ matrix.hadoop }})
     steps:
-    - uses: actions/download-artifact@v7
+    # v8 or later, earlier ones unzip whatever they download, and the archives are uploaded as is
+    - uses: actions/download-artifact@v8
       with:
         name: spark-${{ matrix.spark }}-bin-hadoop${{ matrix.hadoop }}.tgz
     - name: Uncompress the archive and run its fetch-jars.sh
