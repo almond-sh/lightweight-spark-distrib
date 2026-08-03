@@ -620,8 +620,12 @@ object Convert extends CaseApp[ConvertOptions] {
         os.proc(command ++ yarnShuffleJarCommand(sparkVersion, params.scalaBinaryVersion, generated.toString).flatten)
           .call(cwd = os.pwd, stdin = os.Inherit, stdout = os.Inherit, stderr = os.Inherit)
         renameNettyNativeLibs(generated)
-        compareYarnShuffleJarEntries(generated, source)
+        val ok = compareYarnShuffleJarEntries(generated, source)
         os.remove(generated)
+        if (!ok) {
+          System.err.println(s"Error: entry names of re-created $rel do not match the one shipped with Spark")
+          sys.exit(1)
+        }
       }
 
     def entriesContent =
