@@ -39,6 +39,14 @@ object Upload {
     "3.5.8"
   )
   def main(args: Array[String]): Unit = {
+    val selected = args match {
+      case Array() =>
+        versions
+      case Array(sparkVer, hadoopVer) =>
+        Seq(Versions(sparkVer, hadoopVer))
+      case _ =>
+        sys.error("Usage: Upload [sparkVersion hadoopVersion]")
+    }
     val tag = os.proc("git", "tag", "--points-at", "HEAD").call().out.trim()
     val dummy = tag.isEmpty
     if (dummy)
@@ -47,7 +55,7 @@ object Upload {
       if (dummy) ""
       else sys.error("UPLOAD_GH_TOKEN not set")
     }
-    val files = versions.map { ver =>
+    val files = selected.map { ver =>
       val sparkVer = ver.sparkVersion
       val hadoopVer = ver.hadoopVersion
       val url =
