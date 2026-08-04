@@ -5,12 +5,31 @@
 object Upload {
   private def create(sourceUrl: String, dest: os.Path): Unit = {
     val extraArgs = if (System.getenv("CI") == null) Nil else Seq("--server=false")
-    os.proc("scala-cli", "run", "src", extraArgs, "--", "--force", "--dest", dest, "--archive", sourceUrl)
-      .call(stdin = os.Inherit, stdout = os.Inherit)
+    os.proc(
+      "scala-cli", "run", "src", extraArgs, "--",
+      "--force", "--dest", dest, "--archive",
+      // re-creating the YARN shuffle service JAR is the one thing fetch-jars.sh does that isn't a
+      // plain download, so check right away that it comes out with the entries Spark ships
+      "--check-yarn-shuffle-jar", "--cs", "cs",
+      sourceUrl
+    ).call(stdin = os.Inherit, stdout = os.Inherit)
   }
   case class Versions(sparkVersion: String, hadoopVersion: String)
   private def versions = Seq(
+    Versions("4.2.0", "3"),
+    Versions("4.1.2", "3"),
+    Versions("4.0.3", "3"),
+    Versions("3.5.8", "3"),
+    Versions("3.4.4", "3"),
+    Versions("3.3.4", "3"),
+    Versions("3.3.4", "2"),
+    Versions("3.2.4", "3.2"),
+    Versions("3.2.4", "2.7"),
+    Versions("3.1.3", "3.2"),
+    Versions("3.1.3", "2.7"),
+    Versions("3.0.3", "3.2"),
     Versions("3.0.3", "2.7"),
+    Versions("2.4.8", "2.7"),
     Versions("2.4.2", "2.7")
   )
   private val isOnDlcdn = Set(
@@ -19,7 +38,28 @@ object Upload {
     "4.0.3",
     "3.5.8"
   )
-  def main(args: Array[String]): Unit = {
+  /** The version list above, as the JSON a GitHub action matrix is made of.
+    *
+    * CI builds both of its matrices out of this, so that the versions to package live here only.
+    */
+  private def versionsJson =
+    versions
+      .map(ver => s"""{"spark": "${ver.sparkVersion}", "hadoop": "${ver.hadoopVersion}"}""")
+      .mkString("[", ", ", "]")
+  def main(args: Array[String]): Unit =
+    args match {
+      case Array("--json-versions") => println(versionsJson)
+      case _                        => upload(args)
+    }
+  private def upload(args: Array[String]): Unit = {
+    val selected = args match {
+      case Array() =>
+        versions
+      case Array(sparkVer, hadoopVer) =>
+        Seq(Versions(sparkVer, hadoopVer))
+      case _ =>
+        sys.error("Usage: Upload [--json-versions | sparkVersion hadoopVersion]")
+    }
     val tag = os.proc("git", "tag", "--points-at", "HEAD").call().out.trim()
     val dummy = tag.isEmpty
     if (dummy)
@@ -28,7 +68,7 @@ object Upload {
       if (dummy) ""
       else sys.error("UPLOAD_GH_TOKEN not set")
     }
-    val files = versions.map { ver =>
+    val files = selected.map { ver =>
       val sparkVer = ver.sparkVersion
       val hadoopVer = ver.hadoopVersion
       val url =
@@ -37,9 +77,9 @@ object Upload {
         else
           s"https://archive.apache.org/dist/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
       val name = s"spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
-      val dest =
-        if (System.getenv("CI") == null) os.pwd / "tmp" / name
-        else os.temp(prefix = name.stripSuffix(".tgz"), suffix = ".tgz")
+      // written under a path of our own rather than a temporary one, so that CI can pick the
+      // archives up as artifacts
+      val dest = os.pwd / "tmp" / name
       create(url, dest)
       dest -> s"$name.tgz"
     }

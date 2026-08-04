@@ -10,6 +10,9 @@ on:
 jobs:
   compile:
     runs-on: ubuntu-latest
+    outputs:
+      # the matrices of the jobs below, straight from the version list in Upload.scala
+      versions: ${{ steps.versions.outputs.versions }}
     steps:
     - uses: actions/checkout@v7
       with:
@@ -17,12 +20,21 @@ jobs:
     - uses: coursier/setup-action@v3
       with:
         apps: scala-cli
+        version: nightly
     - name: Test
       run: scala-cli compile src --server=false
+    - name: List the versions to package
+      id: versions
+      run: echo "versions=$(scala-cli run Upload.scala --server=false -- --json-versions)" >> "$GITHUB_OUTPUT"
 
   package:
     needs: compile
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.compile.outputs.versions) }}
+    name: package (spark-${{ matrix.spark }}-hadoop${{ matrix.hadoop }})
     steps:
     - uses: actions/checkout@v7
       with:
@@ -30,7 +42,37 @@ jobs:
     - uses: coursier/setup-action@v3
       with:
         apps: scala-cli
+        version: nightly
     - name: Create and upload archives
-      run: scala-cli run Upload.scala --server=false
+      run: scala-cli run Upload.scala --server=false -- ${{ matrix.spark }} ${{ matrix.hadoop }}
       env:
         UPLOAD_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - uses: actions/upload-artifact@v7
+      with:
+        path: tmp/spark-${{ matrix.spark }}-bin-hadoop${{ matrix.hadoop }}.tgz
+        # uploaded as is, rather than zipped around an archive that is compressed already
+        # (the artifact is then named after the file, and the name input ignored)
+        archive: false
+        if-no-files-found: error
+
+  # checks that what the lightweight archives leave out can actually be fetched back, from the
+  # archives themselves rather than from anything this repository has at hand
+  fetch-jars:
+    # package for the artifacts to be there, compile for the matrix
+    needs: [compile, package]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.compile.outputs.versions) }}
+    name: fetch-jars (spark-${{ matrix.spark }}-hadoop${{ matrix.hadoop }})
+    steps:
+    # v8 or later, earlier ones unzip whatever they download, and the archives are uploaded as is
+    - uses: actions/download-artifact@v8
+      with:
+        name: spark-${{ matrix.spark }}-bin-hadoop${{ matrix.hadoop }}.tgz
+    - name: Uncompress the archive and run its fetch-jars.sh
+      run: |
+        tar -xzf spark-${{ matrix.spark }}-bin-hadoop${{ matrix.hadoop }}.tgz
+        cd spark-*/
+        ./fetch-jars.sh
