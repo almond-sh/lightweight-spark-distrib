@@ -81,7 +81,7 @@ object Convert extends CaseApp[ConvertOptions] {
     }
   }
 
-  def csShUrl = "https://github.com/coursier/ci-scripts/raw/dcc000482233f5d4194b11e36573862a869b2fd7/cs.sh"
+  def csShUrl = "https://github.com/coursier/ci-scripts/raw/e1fe4d7735551826571140c627f504d649b893ca/cs.sh"
 
   // spark.shade.packageName, from Spark's parent POM (Spark 3.0 renamed it)
   def sparkShadePackage(sparkVersion: String): String =
@@ -686,6 +686,13 @@ object Convert extends CaseApp[ConvertOptions] {
       case Left(e) => throw new Exception(e)
       case Right(f) => os.Path(f, os.pwd)
     }
+    val csShContent = os.read(csSh)
+      .linesIterator
+      .map { line =>
+        if (line.startsWith("CS_VERSION=")) """CS_VERSION="nightly""""
+        else line
+      }
+      .mkString("\n") + "\n"
 
     val (destBase, dropHead) = os.list(dest) match {
       case Seq(dir) if os.isDir(dir) => (dir, true)
@@ -693,9 +700,7 @@ object Convert extends CaseApp[ConvertOptions] {
     }
     val fetchJarsDir = destBase / "fetch-jars"
     os.makeDir.all(fetchJarsDir)
-    os.copy(csSh, fetchJarsDir / "cs.sh")
-    if (!Properties.isWin)
-      os.perms.set(fetchJarsDir / "cs.sh", "rwxr-xr-x")
+    os.write(fetchJarsDir / "cs.sh", csShContent, perms = if (Properties.isWin) null else "rwxr-xr-x")
 
     def relativeToBase(rel: os.SubPath) =
       if (dropHead) rel.segments.drop(1).mkString("/") else rel.toString
