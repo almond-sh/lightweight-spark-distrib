@@ -83,7 +83,7 @@ object Upload {
       // archives up as artifacts
       val dest = os.pwd / "tmp" / name
       create(url, dest)
-      dest -> s"$name.tgz"
+      dest -> name
     }
     if (!dummy)
       io.github.alexarchambault.millnativeimage.upload.Upload.upload(
