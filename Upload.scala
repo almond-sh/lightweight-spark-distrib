@@ -60,10 +60,12 @@ object Upload {
       case _ =>
         sys.error("Usage: Upload [--json-versions | sparkVersion hadoopVersion]")
     }
-    val tag = os.proc("git", "tag", "--points-at", "HEAD").call().out.trim()
+    // This is deliberately supplied by the workflow from the event ref. Looking for tags that
+    // point at HEAD would also find a tag during a branch build whose HEAD happens to be tagged.
+    val tag = Option(System.getenv("UPLOAD_GH_TAG")).map(_.trim).getOrElse("")
     val dummy = tag.isEmpty
     if (dummy)
-      System.err.println("Not on a git tag, running in dummy mode")
+      System.err.println("No tag-triggered GitHub release requested, running in dummy mode")
     val token = Option(System.getenv("UPLOAD_GH_TOKEN")).getOrElse {
       if (dummy) ""
       else sys.error("UPLOAD_GH_TOKEN not set")

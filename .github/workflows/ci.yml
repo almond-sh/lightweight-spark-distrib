@@ -46,6 +46,8 @@ jobs:
     - name: Create and upload archives
       run: scala-cli run Upload.scala --server=false -- ${{ matrix.spark }} ${{ matrix.hadoop }}
       env:
+        # Derive the release tag from the triggering ref, never from tags pointing at the commit.
+        UPLOAD_GH_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         UPLOAD_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - uses: actions/upload-artifact@v7
       with:
