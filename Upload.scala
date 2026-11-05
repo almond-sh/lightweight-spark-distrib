@@ -32,12 +32,6 @@ object Upload {
     Versions("2.4.8", "2.7"),
     Versions("2.4.2", "2.7")
   )
-  private val isOnDlcdn = Set(
-    "4.2.0",
-    "4.1.2",
-    "4.0.3",
-    "3.5.8"
-  )
   /** The version list above, as the JSON a GitHub action matrix is made of.
     *
     * CI builds both of its matrices out of this, so that the versions to package live here only.
@@ -73,11 +67,10 @@ object Upload {
     val files = selected.map { ver =>
       val sparkVer = ver.sparkVersion
       val hadoopVer = ver.hadoopVersion
+      // dlcdn.apache.org only has the latest release of each Spark line, and drops it as soon
+      // as a newer one is out, while archive.apache.org keeps all of them
       val url =
-        if (isOnDlcdn(sparkVer))
-          s"https://dlcdn.apache.org/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
-        else
-          s"https://archive.apache.org/dist/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
+        s"https://archive.apache.org/dist/spark/spark-$sparkVer/spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
       val name = s"spark-$sparkVer-bin-hadoop$hadoopVer.tgz"
       // written under a path of our own rather than a temporary one, so that CI can pick the
       // archives up as artifacts
