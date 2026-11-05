@@ -81,7 +81,7 @@ object Convert extends CaseApp[ConvertOptions] {
     }
   }
 
-  def csShUrl = "https://github.com/coursier/ci-scripts/raw/e1fe4d7735551826571140c627f504d649b893ca/cs.sh"
+  def csShUrl = "https://github.com/coursier/coursier/raw/v2.1.26/cs.sh"
 
   // spark.shade.packageName, from Spark's parent POM (Spark 3.0 renamed it)
   def sparkShadePackage(sparkVersion: String): String =
